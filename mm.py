@@ -4,6 +4,7 @@ from openpyxl import load_workbook
 import json
 import logging
 import pandas as pd
+from openpyxl.workbook import Workbook
 from telegram import (
     InlineKeyboardButton, InlineKeyboardMarkup, Update, ReplyKeyboardMarkup, KeyboardButton
 )
@@ -429,37 +430,33 @@ async def handle_menu_and_lunch(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def move_orders_to_excel(phone, payment_status="Не оплачено", orders_json_path=ORDERS_JSON, orders_excel_path=ORDERS):
     try:
-        # Загружаем JSON с заказами
         with open(orders_json_path, "r", encoding="utf-8") as f:
             orders = json.load(f)
 
-        # Фильтруем заказы пользователя
         user_orders = [order for order in orders if str(order.get("Номер телефона")).strip() == str(phone).strip()]
         if not user_orders:
             return False, []
 
-        # Генерируем один общий order_id для всех заказов пользователя
         order_id = str(uuid.uuid4())
 
-        # Добавляем order_id и статус оплаты ко всем заказам
         for order in user_orders:
             order["order_id"] = order_id
             order["Статус оплаты"] = payment_status
             order["Комментарий"] = order.get("Комментарий", "Без комментария")
 
-        # Проверяем, существует ли Excel-файл
+
         try:
             wb = load_workbook(orders_excel_path)
             sheet = wb.active
         except FileNotFoundError:
             wb = Workbook()
             sheet = wb.active
+
             sheet.append([
                 "Номер телефона", "Дата", "Обед", "Цена", "Статус оплаты",
                 "День недели", "Адрес доставки", "Имя заказчика", "order_id", "Комментарий"
             ])
 
-        # Добавляем заказы в Excel
         for order in user_orders:
             sheet.append([
                 order.get("Номер телефона", ""),
@@ -470,19 +467,18 @@ async def move_orders_to_excel(phone, payment_status="Не оплачено", or
                 order.get("День недели", ""),
                 order.get("Адрес доставки", ""),
                 order.get("Имя заказчика", ""),
-                order_id,  
-                order.get("Комментарий", "") 
+                order.get("order_id", ""),
+                order.get("Комментарий", "Без комментария")
             ])
 
-        # Сохраняем Excel
+
         wb.save(orders_excel_path)
 
-        # Удаляем оплаченные заказы из JSON
         remaining_orders = [order for order in orders if str(order.get("Номер телефона")).strip() != str(phone).strip()]
         with open(orders_json_path, "w", encoding="utf-8") as f:
             json.dump(remaining_orders, f, ensure_ascii=False, indent=4)
 
-        return True, order_id  # Возвращаем один общий order_id
+        return True, order_id
 
     except Exception as e:
         print(f"Ошибка при переносе в Excel: {e}")
@@ -563,7 +559,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if text == "Сделать заказ 🍴":
             await show_menu(update, context)
-        if context.user_data.get("awaiting_comment"):
+        elif context.user_data.get("awaiting_comment"):
             await handle_comment(update, context)
             return
         elif text == "Корзина 🗑":
@@ -608,8 +604,10 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif text == "Я согласен ✔":
             await update.message.reply_text("Спасибо за согласие! Переходим к следующему шагу.")
             await start(update, context)
+
         else:
             await update.message.reply_text("Неизвестная команда. Пожалуйста, выберите действие из меню.")
+
     except Exception as e:
         logger.error(f"Ошибка при обработке кнопки: {e}")
         await update.message.reply_text("Произошла ошибка. Пожалуйста, попробуйте снова.")
@@ -947,7 +945,6 @@ async def handle_complex_lunch(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает выбор способа оплаты."""
     selected_option = update.message.text
     phone = context.user_data.get("phone_number")
 
@@ -956,13 +953,14 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
         return
 
     if selected_option == "Оплатить картой💳":
-        await pay(update, context)  # Запускаем процесс создания платежа
+        await pay(update, context)
         return
 
     elif selected_option == "Оплатить наличными":
         success, order_id = await move_orders_to_excel(phone, "Наличными")
         if success:
             await update.message.reply_text("Оплата наличными подтверждена. Ваш заказ перенесён в историю.")
+            await show_main_menu(update, context)
         else:
             await update.message.reply_text("Ошибка при переносе заказа в историю.")
 
@@ -995,7 +993,7 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "description": f"Оплата заказа на сумму {total_price} рублей"
         })
 
-        context.user_data['payment_id'] = payment.id  # Сохраняем ID платежа
+        context.user_data['payment_id'] = payment.id
 
         await update.message.reply_text(
             f'Платёж создан! Перейдите по ссылке({payment.confirmation.confirmation_url}) для оплаты.',
@@ -1009,7 +1007,7 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def check_payment_status(update: Update, context: ContextTypes.DEFAULT_TYPE, payment_id: str) -> None:
     while True:
-        await asyncio.sleep(10)  # Проверяем статус каждые 10 секунд
+        await asyncio.sleep(10)
 
         try:
             payment = Payment.find_one(payment_id)
@@ -1021,6 +1019,7 @@ async def check_payment_status(update: Update, context: ContextTypes.DEFAULT_TYP
                     success, order_id = await move_orders_to_excel(phone, "Картой")
                     if success:
                         await update.message.reply_text("Оплата прошла успешно! Ваш заказ перенесён в историю.")
+                        await show_main_menu(update, context)
                     else:
                         await update.message.reply_text("Ошибка при переносе заказа в историю.")
                 break
@@ -1033,7 +1032,7 @@ async def check_payment_status(update: Update, context: ContextTypes.DEFAULT_TYP
             break
 
 async def show_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает корзину и запрашивает комментарий, используя ConversationHandler."""
+
     phone = context.user_data.get("phone_number")
 
     if phone is None:
@@ -1053,7 +1052,6 @@ async def show_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Ваша корзина пуста.")
         return ConversationHandler.END
 
-    # Формируем сообщение о содержимом корзины
     from collections import defaultdict
     grouped_orders = defaultdict(lambda: {"Блюда": [], "Цена": 0, "День недели": ""})
 
@@ -1076,45 +1074,53 @@ async def show_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cart_message += f"💵 *Общая сумма*: {total_price} рублей"
 
     await update.message.reply_text(cart_message, parse_mode="Markdown")
-
-    # Устанавливаем флаг, что бот ожидает ввода комментария
     context.user_data["awaiting_comment"] = True
-
-    # Показываем кнопки для комментария
     keyboard = [["Пропустить комментарий"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
 
     await update.message.reply_text("📝 Оставьте комментарий к заказу или нажмите 'Пропустить комментарий'.", reply_markup=reply_markup)
 
-    return ENTER_COMMENT  # Бот теперь ОЖИДАЕТ комментарий
-
+    return ENTER_COMMENT
 
 async def handle_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохраняет введённый комментарий и переходит к выбору способа оплаты."""
-    comment = update.message.text.strip()
+    text = update.message.text.strip()
 
-    if comment.lower() == "пропустить комментарий":
+    if text == "Пропустить комментарий":
         comment = "Без комментария"
         await update.message.reply_text("Комментарий не добавлен. Переходим к выбору способа оплаты.")
     else:
+        comment = text
         await update.message.reply_text(f"✅ Комментарий сохранён: {comment}. Теперь выберите способ оплаты.")
 
-    context.user_data["comment"] = comment  # Сохраняем комментарий
-    context.user_data["awaiting_comment"] = False  # Сбрасываем флаг
+    context.user_data["comment"] = comment
+    context.user_data["awaiting_comment"] = False
 
-    return await show_payment_options(update, context)  # Показываем кнопки оплаты
+    phone = context.user_data.get("phone_number")
+    if phone:
+        try:
+            with open(ORDERS_JSON, "r", encoding="utf-8") as f:
+                orders = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            orders = []
+
+        for order in orders:
+            if order.get("Номер телефона") == phone:
+                order["Комментарий"] = comment
+
+        with open(ORDERS_JSON, "w", encoding="utf-8") as f:
+            json.dump(orders, f, ensure_ascii=False, indent=4)
+
+    return await show_payment_options(update, context)
 
 async def show_payment_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Выводит кнопки выбора способа оплаты."""
     keyboard = [["Оплатить картой💳"], ["Оплатить наличными"], ["Назад 🔙"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
 
     await update.message.reply_text("Выберите способ оплаты:", reply_markup=reply_markup)
-    return ConversationHandler.END  # Завершаем состояние
+    return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена процесса."""
     await update.message.reply_text("Отмена ввода комментария.")
     return ConversationHandler.END
 
@@ -1198,11 +1204,11 @@ def main():
             fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
         )
         comment_handler = ConversationHandler(
-            entry_points=[MessageHandler(filters.Regex("^Корзина 🗑$"), show_cart)],  # Входная точка
+            entry_points=[MessageHandler(filters.Regex("^Корзина 🗑$"), show_cart)],
             states={
                 ENTER_COMMENT: [MessageHandler(filters.TEXT, handle_comment)]
             },
-            fallbacks=[CommandHandler("cancel", cancel)],  # Позволяет выйти из процесса
+            fallbacks=[CommandHandler("cancel", cancel)],
         )
 
         application.add_handler(CommandHandler("start", under_start))
