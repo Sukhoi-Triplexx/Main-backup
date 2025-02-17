@@ -89,7 +89,7 @@ async def under_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = context.user_data.get("phone verified")
     if phone is None:
         await update.message.reply_text(
-            "Пожалуйста, подтвердите согласие на обработку ПД \n https://telegra.ph/Soglasie-obrabotki-PD-02-10",
+            "Инструкция по регистрации \n https://telegra.ph/Soglasie-obrabotki-PD-02-10",
             reply_markup=ReplyKeyboardMarkup(
                 [[KeyboardButton("Я согласен ✔")]],
                 resize_keyboard=True, one_time_keyboard=True
