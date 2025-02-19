@@ -30,7 +30,7 @@ DATA_FILE = "Data.json"
 ORDERS = "Заказы.xlsx"
 MENU = "https://docs.google.com/spreadsheets/d/1eEEHGwtSV2znQDGJcgGVEQ2PzNTLoDPOT-9vtyQCoQY/export?format=csv"
 ADDRESSES_FILE = "Addresses.json" 
-TOKEN = "7814928433:AAGERulnnNOIvqbKp6IcQ-0yytP0szoSp9A"
+TOKEN = "8178914232:AAEHHs8edmiStNxA5FelDC16fTo-NVidNaM"
 ORDERS_JSON = "Orders.json"
 CARD_NUMBER = "2222 3333 4444 5555"
 
@@ -89,7 +89,7 @@ async def under_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = context.user_data.get("phone verified")
     if phone is None:
         await update.message.reply_text(
-            "Инструкция по регистрации \n https://telegra.ph/Soglasie-obrabotki-PD-02-10",
+            "Пожалуйста, подтвердите согласие на обработку ПД \n https://telegra.ph/Soglasie-obrabotki-PD-02-10",
             reply_markup=ReplyKeyboardMarkup(
                 [[KeyboardButton("Я согласен ✔")]],
                 resize_keyboard=True, one_time_keyboard=True
@@ -321,7 +321,6 @@ async def handle_menu_and_lunch(update: Update, context: ContextTypes.DEFAULT_TY
             keyboard.append([KeyboardButton("Корзина 🗑")])
             reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
             await query.message.reply_text("Выберите обед 🍜:", reply_markup=reply_markup)
-
         except Exception as e:
             await query.message.reply_text(f"Ошибка при загрузке меню: {e}")
             return
@@ -644,6 +643,7 @@ async def clear_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if len(orders) < initial_count:
             await update.message.reply_text("Корзина успешно очищена")
+            await show_main_menu(update, context)
         else:
             await update.message.reply_text("Корзина пуста")
         
@@ -964,20 +964,6 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
         else:
             await update.message.reply_text("Ошибка при переносе заказа в историю.")
 
-    elif selected_option == "Назад 🔙":
-        await show_menu(update, context)
-        return
-    else:
-        await update.message.reply_text("Неизвестная команда. Пожалуйста, выберите один из вариантов.")
-        return
-
-    payment_keyboard = [["Назад 🔙"]]
-    await update.message.reply_text(
-        "Для возвращения в меню нажмите Назад",
-        reply_markup=ReplyKeyboardMarkup(payment_keyboard, resize_keyboard=True)
-    )
-
-
 async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Создаёт платёж с суммой из корзины."""
     total_price = context.user_data.get("total_price", 0)
@@ -1023,13 +1009,33 @@ async def check_payment_status(update: Update, context: ContextTypes.DEFAULT_TYP
                     else:
                         await update.message.reply_text("Ошибка при переносе заказа в историю.")
                 break
-            elif status == 'canceled':
+            if status == 'pending':
+                await cancel_payment(update,context, payment_id, status)
+                await update.message.reply_text("Ваш платеж отменен")
+                break
+
+
+            if status == 'canceled':
                 await update.message.reply_text(f'Платеж {payment_id} отменен.')
                 break
             context.user_data['payment.status'] = status
+
+
         except Exception as e:
             await update.message.reply_text(f'Ошибка при проверке статуса платежа: {str(e)}')
             break
+
+async def cancel_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, payment_id: str, status: str) -> None:
+    await asyncio.sleep(600)
+    try:
+        payment = Payment.find_one(payment_id)
+        status = payment.status
+
+        if status != 'succeeded':
+            await clear_cart(update, context)
+
+    except Exception as e:
+            print(f"Ошибка отмены платежа{e}")
 
 async def show_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -1113,7 +1119,7 @@ async def handle_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await show_payment_options(update, context)
 
 async def show_payment_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [["Оплатить картой💳"], ["Оплатить наличными"], ["Назад 🔙"]]
+    keyboard = [["Оплатить картой💳"], ["Оплатить наличными"], ["Назад 🔙"], ["Очистить корзину❌"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
 
     await update.message.reply_text("Выберите способ оплаты:", reply_markup=reply_markup)
