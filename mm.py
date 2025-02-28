@@ -172,6 +172,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка в команде start: {e}")
         await update.message.reply_text("Произошла ошибка. Пожалуйста, попробуйте снова.")
 
+
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -994,7 +995,6 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def check_payment_status(update: Update, context: ContextTypes.DEFAULT_TYPE, payment_id: str) -> None:
     while True:
         await asyncio.sleep(10)
-
         try:
             payment = Payment.find_one(payment_id)
             status = payment.status
@@ -1006,8 +1006,10 @@ async def check_payment_status(update: Update, context: ContextTypes.DEFAULT_TYP
                     if success:
                         await update.message.reply_text("Оплата прошла успешно! Ваш заказ перенесён в историю.")
                         await show_main_menu(update, context)
+                        break
                     else:
                         await update.message.reply_text("Ошибка при переносе заказа в историю.")
+                        break
                 break
             if status == 'pending':
                 await cancel_payment(update,context, payment_id, status)
