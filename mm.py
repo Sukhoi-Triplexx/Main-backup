@@ -15,12 +15,27 @@ from telegram.ext import (
 from datetime import datetime, time, timedelta, date
 from yookassa import Configuration, Payment, payment
 import uuid
+import os
+from dotenv import load_dotenv
 
-#YooKassa settings
+# Load environment variables
+load_dotenv()
 
-ENTER_COMMENT = 1
+# Configuration
+TOKEN = os.getenv('TELEGRAM_TOKEN')
+YOOKASSA_ACCOUNT_ID = os.getenv('YOOKASSA_ACCOUNT_ID')
+YOOKASSA_SECRET_KEY = os.getenv('YOOKASSA_SECRET_KEY')
+CARD_NUMBER = os.getenv('CARD_NUMBER')
 
-Configuration.configure(account_id="1032619", secret_key="test_oAGk-KejRiNUifJhXcHtoBCXIiZYZB1E9YDHaBkEmUY")
+# YooKassa settings
+Configuration.configure(account_id=YOOKASSA_ACCOUNT_ID, secret_key=YOOKASSA_SECRET_KEY)
+
+# Constants
+DATA_FILE = "Data.json"
+ORDERS = "Заказы.xlsx"
+MENU = "https://docs.google.com/spreadsheets/d/1eEEHGwtSV2znQDGJcgGVEQ2PzNTLoDPOT-9vtyQCoQY/export?format=csv"
+ADDRESSES_FILE = "Addresses.json"
+ORDERS_JSON = "Orders.json"
 
 #logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -29,7 +44,7 @@ logger = logging.getLogger(__name__)
 DATA_FILE = "Data.json"
 ORDERS = "Заказы.xlsx"
 MENU = "https://docs.google.com/spreadsheets/d/1eEEHGwtSV2znQDGJcgGVEQ2PzNTLoDPOT-9vtyQCoQY/export?format=csv"
-ADDRESSES_FILE = "Addresses.json" 
+ADDRESSES_FILE = "Addresses.json"
 TOKEN = "8178914232:AAEHHs8edmiStNxA5FelDC16fTo-NVidNaM"
 ORDERS_JSON = "Orders.json"
 CARD_NUMBER = "2222 3333 4444 5555"
@@ -38,9 +53,15 @@ CHOOSE_ADDRESS, ENTER_NAME, BROADCAST_MESSAGE, ADD_ADDRESS, ENTER_PHONE, SELECT_
 
 def load_data(file_path, default):
     try:
+        if not os.path.exists(file_path):
+            logger.warning(f"File {file_path} does not exist, using default value")
+            return default
+            
         with open(file_path, "r", encoding="utf-8") as file:
-            return json.load(file)
-    except FileNotFoundError:
+            data = json.load(file)
+            return data
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error in {file_path}: {e}")
         return default
     except Exception as e:
         logger.error(f"Error loading data from {file_path}: {e}")
@@ -52,6 +73,7 @@ def save_data(file_path, data):
             json.dump(data, file, ensure_ascii=False, indent=4)
     except Exception as e:
         logger.error(f"Error saving data to {file_path}: {e}")
+        raise
 
 def load_user_data():
     return load_data(DATA_FILE, {"users": []})
@@ -67,23 +89,39 @@ def save_addresses(data):
 
 def load_menu_data():
     try:
+        if not os.path.exists(MENU):
+            logger.error("Menu file does not exist")
+            return None
+            
         df = pd.read_csv(MENU)
         return df
     except Exception as e:
-        logger.error(f"Ошибка при загрузке меню: {e}")
+        logger.error(f"Error loading menu: {e}")
         return None
 
 def normalize_phone_number(phone_number):
-    digits = ''.join(filter(str.isdigit, phone_number))
-    if len(digits) == 11 and digits.startswith('8'):
-        return '7' + digits[1:]
-    elif len(digits) == 10 and digits.startswith('9'):
-        return '7' + digits
-    elif len(digits) == 11 and digits.startswith('7'):
-        return digits
-    elif len(digits) == 12 and digits.startswith('+7'):
-        return digits
-    return phone_number
+    try:
+        if not phone_number:
+            return None
+            
+        digits = ''.join(filter(str.isdigit, phone_number))
+        if not digits:
+            return None
+            
+        if len(digits) == 11 and digits.startswith('8'):
+            return '7' + digits[1:]
+        elif len(digits) == 10 and digits.startswith('9'):
+            return '7' + digits
+        elif len(digits) == 11 and digits.startswith('7'):
+            return digits
+        elif len(digits) == 12 and digits.startswith('+7'):
+            return digits
+            
+        logger.warning(f"Invalid phone number format: {phone_number}")
+        return None
+    except Exception as e:
+        logger.error(f"Error normalizing phone number: {e}")
+        return None
 
 async def under_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = context.user_data.get("phone verified")
@@ -212,33 +250,37 @@ async def choose_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def enter_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        name = update.message.text
+        name = update.message.text.strip()
+        if not name:
+            await update.message.reply_text("Имя не может быть пустым. Пожалуйста, введите ваше имя и фамилию:")
+            return ENTER_NAME
+
         phone_number = context.user_data.get("phone_number")
         address = context.user_data.get("address")
 
         if not phone_number or not address:
+            logger.error("Missing phone number or address in user data")
             await update.message.reply_text("Ошибка регистрации. Попробуйте снова.")
             return ConversationHandler.END
 
         user_data = load_user_data()
-        user_data["users"].append({"phone": phone_number, "role": "Заказчик", "address": address, "name": name, "chat_id": update.message.chat_id})
+        user_data["users"].append({
+            "phone": phone_number,
+            "role": "Заказчик",
+            "address": address,
+            "name": name,
+            "chat_id": update.message.chat_id
+        })
         save_user_data(user_data)
 
         await update.message.reply_text(f"Регистрация завершена. Добро пожаловать, {name}!")
         role = context.user_data.get("role", "Заказчик")
         
-        if role != "Администратор":
-            keyboard = get_role_keyboard("Заказчик")
-            await update.message.reply_text(
-                f"Теперь вы можете заказывать, {name}!",
-                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-            )
-        else:
-            keyboard = get_role_keyboard("Администратор")
-            await update.message.reply_text(
-                f"Добро пожаловать, {name}!",
-                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-            )
+        keyboard = get_role_keyboard(role)
+        await update.message.reply_text(
+            f"Теперь вы можете заказывать, {name}!",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
         return ConversationHandler.END
     except Exception as e:
         logger.error(f"Error in enter_name: {e}")
@@ -430,11 +472,16 @@ async def handle_menu_and_lunch(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def move_orders_to_excel(phone, payment_status="Не оплачено", orders_json_path=ORDERS_JSON, orders_excel_path=ORDERS):
     try:
+        if not os.path.exists(orders_json_path):
+            logger.error(f"Orders JSON file does not exist: {orders_json_path}")
+            return False, None
+
         with open(orders_json_path, "r", encoding="utf-8") as f:
             orders = json.load(f)
 
         user_orders = [order for order in orders if str(order.get("Номер телефона")).strip() == str(phone).strip()]
         if not user_orders:
+            logger.warning(f"No orders found for phone: {phone}")
             return False, []
 
         order_id = str(uuid.uuid4())
@@ -444,19 +491,21 @@ async def move_orders_to_excel(phone, payment_status="Не оплачено", or
             order["Статус оплаты"] = payment_status
             order["Комментарий"] = order.get("Комментарий", "Без комментария")
 
-
         try:
-            wb = load_workbook(orders_excel_path)
-            sheet = wb.active
-        except FileNotFoundError:
-            wb = Workbook()
-            sheet = wb.active
+            if os.path.exists(orders_excel_path):
+                wb = load_workbook(orders_excel_path)
+            else:
+                wb = Workbook()
+                sheet = wb.active
+                sheet.append([
+                    "Номер телефона", "Дата", "Обед", "Цена", "Статус оплаты",
+                    "День недели", "Адрес доставки", "Имя заказчика", "order_id", "Комментарий"
+                ])
+        except Exception as e:
+            logger.error(f"Error handling Excel file: {e}")
+            return False, None
 
-            sheet.append([
-                "Номер телефона", "Дата", "Обед", "Цена", "Статус оплаты",
-                "День недели", "Адрес доставки", "Имя заказчика", "order_id", "Комментарий"
-            ])
-
+        sheet = wb.active
         for order in user_orders:
             sheet.append([
                 order.get("Номер телефона", ""),
@@ -471,7 +520,6 @@ async def move_orders_to_excel(phone, payment_status="Не оплачено", or
                 order.get("Комментарий", "Без комментария")
             ])
 
-
         wb.save(orders_excel_path)
 
         remaining_orders = [order for order in orders if str(order.get("Номер телефона")).strip() != str(phone).strip()]
@@ -481,7 +529,7 @@ async def move_orders_to_excel(phone, payment_status="Не оплачено", or
         return True, order_id
 
     except Exception as e:
-        print(f"Ошибка при переносе в Excel: {e}")
+        logger.error(f"Error moving orders to Excel: {e}")
         return False, None
 
 
@@ -967,12 +1015,12 @@ async def handle_payment_selection(update: Update, context: ContextTypes.DEFAULT
 
 async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Создаёт платёж с суммой из корзины."""
-    total_price = context.user_data.get("total_price", 0)
-    if total_price == 0:
-        await update.message.reply_text("Ваша корзина пуста, оплатить нечего.")
-        return
-
     try:
+        total_price = context.user_data.get("total_price", 0)
+        if total_price == 0:
+            await update.message.reply_text("Ваша корзина пуста, оплатить нечего.")
+            return
+
         payment = Payment.create({
             "amount": {"value": f"{total_price}.00", "currency": "RUB"},
             "confirmation": {"type": "redirect", "return_url": "https://t.me/DirTasteBot"},
@@ -990,54 +1038,65 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         asyncio.create_task(check_payment_status(update, context, payment.id))
 
     except Exception as e:
+        logger.error(f'Ошибка при создании платежа: {str(e)}')
         await update.message.reply_text(f'Ошибка при создании платежа: {str(e)}')
 
 async def check_payment_status(update: Update, context: ContextTypes.DEFAULT_TYPE, payment_id: str) -> None:
-    while True:
-        await asyncio.sleep(10)
-        try:
-            payment = Payment.find_one(payment_id)
-            status = payment.status
-
-            if status == 'succeeded':
-                phone = context.user_data.get("phone_number")
-                if phone:
-                    success, order_id = await move_orders_to_excel(phone, "Картой")
-                    if success:
-                        await update.message.reply_text("Оплата прошла успешно! Ваш заказ перенесён в историю.")
-                        await show_main_menu(update, context)
-                        break
-                    else:
-                        await update.message.reply_text("Ошибка при переносе заказа в историю.")
-                        break
-                break
-            if status == 'pending':
-                await cancel_payment(update,context, payment_id, status)
-                await update.message.reply_text("Ваш платеж отменен")
-                break
-
-
-            if status == 'canceled':
-                await update.message.reply_text(f'Платеж {payment_id} отменен.')
-                break
-            context.user_data['payment.status'] = status
-
-
-        except Exception as e:
-            await update.message.reply_text(f'Ошибка при проверке статуса платежа: {str(e)}')
-            break
-
-async def cancel_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, payment_id: str, status: str) -> None:
-    await asyncio.sleep(600)
     try:
-        payment = Payment.find_one(payment_id)
-        status = payment.status
+        while True:
+            await asyncio.sleep(10)
+            try:
+                payment = Payment.find_one(payment_id)
+                status = payment.status
 
-        if status != 'succeeded':
-            await clear_cart(update, context)
+                if status == 'succeeded':
+                    phone = context.user_data.get("phone_number")
+                    if phone:
+                        success, order_id = await move_orders_to_excel(phone, "Картой")
+                        if success:
+                            await update.message.reply_text("Оплата прошла успешно! Ваш заказ перенесён в историю.")
+                            await show_main_menu(update, context)
+                            return
+                        else:
+                            await update.message.reply_text("Ошибка при переносе заказа в историю.")
+                            return
+                    return
+
+                if status == 'pending':
+                    await cancel_payment(update, context, payment_id, status)
+                    await update.message.reply_text("Ваш платеж отменен")
+                    return
+
+                if status == 'canceled':
+                    await update.message.reply_text(f'Платеж {payment_id} отменен.')
+                    return
+
+                context.user_data['payment.status'] = status
+
+            except Exception as e:
+                logger.error(f'Ошибка при проверке статуса платежа: {str(e)}')
+                await update.message.reply_text(f'Ошибка при проверке статуса платежа: {str(e)}')
+                return
 
     except Exception as e:
-            print(f"Ошибка отмены платежа{e}")
+        logger.error(f'Критическая ошибка в check_payment_status: {str(e)}')
+        await update.message.reply_text('Произошла критическая ошибка. Пожалуйста, попробуйте позже.')
+
+async def cancel_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, payment_id: str, status: str) -> None:
+    try:
+        await asyncio.sleep(600)
+        payment = Payment.find_one(payment_id)
+        current_status = payment.status
+
+        if current_status != 'succeeded':
+            try:
+                await clear_cart(update, context)
+            except Exception as e:
+                logger.error(f"Ошибка при очистке корзины: {e}")
+                await update.message.reply_text("Ошибка при очистке корзины. Пожалуйста, попробуйте позже.")
+
+    except Exception as e:
+        logger.error(f"Ошибка при отмене платежа: {e}")
 
 async def show_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -1091,41 +1150,66 @@ async def show_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ENTER_COMMENT
 
 async def handle_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+    try:
+        text = update.message.text.strip()
+        if not context.user_data.get("awaiting_comment"):
+            logger.warning("Comment handling called without awaiting_comment flag")
+            return ConversationHandler.END
 
-    if text == "Пропустить комментарий":
-        comment = "Без комментария"
-        await update.message.reply_text("Комментарий не добавлен. Переходим к выбору способа оплаты.")
-    else:
-        comment = text
-        await update.message.reply_text(f"✅ Комментарий сохранён: {comment}. Теперь выберите способ оплаты.")
+        if text == "Пропустить комментарий":
+            comment = "Без комментария"
+            await update.message.reply_text("Комментарий не добавлен. Переходим к выбору способа оплаты.")
+        else:
+            if len(text) > 500:  # Ограничение на длину комментария
+                await update.message.reply_text("Комментарий слишком длинный. Максимальная длина - 500 символов.")
+                return ENTER_COMMENT
+            comment = text
+            await update.message.reply_text(f"✅ Комментарий сохранён: {comment}. Теперь выберите способ оплаты.")
 
-    context.user_data["comment"] = comment
-    context.user_data["awaiting_comment"] = False
+        context.user_data["comment"] = comment
+        context.user_data["awaiting_comment"] = False
 
-    phone = context.user_data.get("phone_number")
-    if phone:
-        try:
-            with open(ORDERS_JSON, "r", encoding="utf-8") as f:
-                orders = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            orders = []
+        phone = context.user_data.get("phone_number")
+        if phone:
+            try:
+                with open(ORDERS_JSON, "r", encoding="utf-8") as f:
+                    orders = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError) as e:
+                logger.error(f"Error loading orders: {e}")
+                orders = []
 
-        for order in orders:
-            if order.get("Номер телефона") == phone:
-                order["Комментарий"] = comment
+            for order in orders:
+                if order.get("Номер телефона") == phone:
+                    order["Комментарий"] = comment
 
-        with open(ORDERS_JSON, "w", encoding="utf-8") as f:
-            json.dump(orders, f, ensure_ascii=False, indent=4)
+            try:
+                with open(ORDERS_JSON, "w", encoding="utf-8") as f:
+                    json.dump(orders, f, ensure_ascii=False, indent=4)
+            except Exception as e:
+                logger.error(f"Error saving orders with comment: {e}")
 
-    return await show_payment_options(update, context)
+        return await show_payment_options(update, context)
+    except Exception as e:
+        logger.error(f"Error in handle_comment: {e}")
+        await update.message.reply_text("Произошла ошибка. Пожалуйста, попробуйте снова.")
+        return ConversationHandler.END
 
 async def show_payment_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [["Оплатить картой💳"], ["Оплатить наличными"], ["Назад 🔙"], ["Очистить корзину❌"]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    try:
+        if not context.user_data.get("total_price"):
+            logger.warning("Payment options shown without total price")
+            await update.message.reply_text("Ошибка: сумма заказа не найдена.")
+            return ConversationHandler.END
 
-    await update.message.reply_text("Выберите способ оплаты:", reply_markup=reply_markup)
-    return ConversationHandler.END
+        keyboard = [["Оплатить картой💳"], ["Оплатить наличными"], ["Назад 🔙"], ["Очистить корзину❌"]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+
+        await update.message.reply_text("Выберите способ оплаты:", reply_markup=reply_markup)
+        return ConversationHandler.END
+    except Exception as e:
+        logger.error(f"Error in show_payment_options: {e}")
+        await update.message.reply_text("Произошла ошибка. Пожалуйста, попробуйте снова.")
+        return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1185,7 +1269,16 @@ async def show_all_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     try:
-        application = Application.builder().token(TOKEN).build()
+        # Configure application with proper timeouts and update parameters
+        application = (
+            Application.builder()
+            .token(TOKEN)
+            .connect_timeout(30)
+            .read_timeout(30)
+            .write_timeout(30)
+            .pool_timeout(30)
+            .build()
+        )
 
         registration_handler = ConversationHandler(
             entry_points=[MessageHandler(filters.CONTACT, start)],
@@ -1219,6 +1312,7 @@ def main():
             fallbacks=[CommandHandler("cancel", cancel)],
         )
 
+        # Add handlers
         application.add_handler(CommandHandler("start", under_start))
         application.add_handler(registration_handler)
         application.add_handler(broadcast_handler)
@@ -1229,9 +1323,15 @@ def main():
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
         application.add_handler(MessageHandler(filters.Regex("^Корзина 🗑$"), show_cart))
         application.add_handler(comment_handler)
-        application.run_polling()
+
+        # Start the bot with proper polling configuration
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True
+        )
     except Exception as e:
         logger.error(f"Ошибка в main: {e}")
+        raise
 
 if __name__ == "__main__":
     main()
