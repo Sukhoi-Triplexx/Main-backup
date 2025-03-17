@@ -1043,6 +1043,7 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def check_payment_status(update: Update, context: ContextTypes.DEFAULT_TYPE, payment_id: str) -> None:
     try:
+        start_time = datetime.now()
         while True:
             await asyncio.sleep(10)
             try:
@@ -1063,9 +1064,11 @@ async def check_payment_status(update: Update, context: ContextTypes.DEFAULT_TYP
                     return
 
                 if status == 'pending':
-                    await cancel_payment(update, context, payment_id, status)
-                    await update.message.reply_text("Ваш платеж отменен")
-                    return
+                    # Проверяем, прошло ли 10 минут
+                    if (datetime.now() - start_time).total_seconds() >= 600:
+                        await cancel_payment(update, context, payment_id)
+                        await update.message.reply_text("Время ожидания оплаты истекло. Платеж отменен.")
+                        return
 
                 if status == 'canceled':
                     await update.message.reply_text(f'Платеж {payment_id} отменен.')
@@ -1082,9 +1085,8 @@ async def check_payment_status(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error(f'Критическая ошибка в check_payment_status: {str(e)}')
         await update.message.reply_text('Произошла критическая ошибка. Пожалуйста, попробуйте позже.')
 
-async def cancel_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, payment_id: str, status: str) -> None:
+async def cancel_payment(update: Update, context: ContextTypes.DEFAULT_TYPE, payment_id: str) -> None:
     try:
-        await asyncio.sleep(600)
         payment = Payment.find_one(payment_id)
         current_status = payment.status
 
