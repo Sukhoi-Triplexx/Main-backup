@@ -40,15 +40,6 @@ ORDERS_JSON = "Orders.json"
 #logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Constants
-DATA_FILE = "Data.json"
-ORDERS = "Заказы.xlsx"
-MENU = "https://docs.google.com/spreadsheets/d/1eEEHGwtSV2znQDGJcgGVEQ2PzNTLoDPOT-9vtyQCoQY/export?format=csv"
-ADDRESSES_FILE = "Addresses.json"
-TOKEN = "8178914232:AAEHHs8edmiStNxA5FelDC16fTo-NVidNaM"
-ORDERS_JSON = "Orders.json"
-CARD_NUMBER = "2222 3333 4444 5555"
-
 CHOOSE_ADDRESS, ENTER_NAME, BROADCAST_MESSAGE, ADD_ADDRESS, ENTER_PHONE, SELECT_ROLE, ENTER_COMMENT = range(7)
 
 def load_data(file_path, default):
@@ -192,7 +183,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
 
                 context.user_data["phone_number"] = phone_number
-                keyboard = [[InlineKeyboardButton(address, callback_data=address)] for address in addresses]
+                keyboard = []
+                for address in addresses:
+                    # Ensure address is a string and truncate if needed
+                    address_str = str(address)[:64]  # Limit to 64 characters
+                    keyboard.append([InlineKeyboardButton(address_str, callback_data=address_str)])
+                
                 await update.message.reply_text(
                     "Выберите адрес доставки 🏘:",
                     reply_markup=InlineKeyboardMarkup(keyboard)
@@ -1337,3 +1333,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
