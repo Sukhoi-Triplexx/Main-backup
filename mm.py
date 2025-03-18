@@ -185,9 +185,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data["phone_number"] = phone_number
                 keyboard = []
                 for address in addresses:
-                    # Ensure address is a string and truncate if needed
+                    # Convert address to string and create a unique callback data
                     address_str = str(address)[:64]  # Limit to 64 characters
-                    keyboard.append([InlineKeyboardButton(address_str, callback_data=address_str)])
+                    callback_data = f"addr_{hash(address_str) % 10000}"  # Create shorter unique identifier
+                    keyboard.append([InlineKeyboardButton(address_str, callback_data=callback_data)])
+                
+                # Store address mapping in context
+                context.user_data["address_mapping"] = {
+                    f"addr_{hash(str(addr))% 10000}": str(addr) 
+                    for addr in addresses
+                }
                 
                 await update.message.reply_text(
                     "Выберите адрес доставки 🏘:",
@@ -231,7 +238,14 @@ async def choose_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
 
-        address = query.data
+        # Get the actual address from the mapping
+        callback_data = query.data
+        address = context.user_data["address_mapping"].get(callback_data)
+        
+        if not address:
+            await query.edit_message_text("Ошибка: адрес не найден")
+            return
+
         phone_number = context.user_data.get("phone_number")
         if not phone_number:
             await query.edit_message_text("Ошибка регистрации. Попробуйте ещё раз.")
